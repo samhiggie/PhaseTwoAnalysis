@@ -20,7 +20,14 @@ Implementation:
       - for pfCombinedInclusiveSecondaryVertexV2BJetTags: L = 0.5426, M = 0.8484, T = 0.9535)
       - for deepCSV: L = 0.2219, M = 0.6324, T = 0.8958
 */
+/*
+    Modifier: Sam Higginbotham 
+    Date: July 6th,2017. 
+    - Photon ID:Selection based on https://twiki.cern.ch/twiki/bin/view/CMS/CutBasedPhotonIdentificationRun2#Selection_implementation_details 
+    - Starting template taken DIRECTLY from RecoEgamma/Examples/plugins/PatPhotonSimpleAnalyzer.cc  (Author:  M.B. Anderson based on simple photon analyzer by:  J. Stilley, A. Askew)
 
+
+*/
 //
 // Original Author:  Elvire Bouvier
 //         Created:  Wed, 14 Jun 2017 14:16:22 GMT
@@ -50,6 +57,7 @@ Implementation:
 #include "PhysicsTools/SelectorUtils/interface/PFJetIDSelectionFunctor.h"
 #include "DataFormats/PatCandidates/interface/MET.h"
 #include "DataFormats/PatCandidates/interface/PackedGenParticle.h"
+#include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "DataFormats/JetReco/interface/GenJet.h"
 
 #include "TrackingTools/TransientTrack/interface/TransientTrackBuilder.h"
@@ -60,9 +68,6 @@ Implementation:
 #include "SimTracker/Records/interface/TrackAssociatorRecord.h"
 #include "DataFormats/VertexReco/interface/Vertex.h"
 #include "DataFormats/VertexReco/interface/VertexFwd.h"
-#include "Geometry/Records/interface/MuonGeometryRecord.h"
-#include "Geometry/GEMGeometry/interface/ME0EtaPartitionSpecs.h"
-#include "Geometry/GEMGeometry/interface/ME0Geometry.h"
 
 #include "FWCore/Framework/interface/ESHandle.h"
 
@@ -76,8 +81,16 @@ Implementation:
 #include "TFile.h"
 #include "TH1.h"
 #include "TH2.h"
+#include "TProfile.h"
 #include "TLorentzVector.h"
 #include "Math/GenVector/VectorUtil.h"
+
+//for photons
+#include "DataFormats/Common/interface/View.h"
+#include "DataFormats/PatCandidates/interface/Photon.h"
+#include "TMath.h"
+#include "TTree.h"
+
 
 //
 // class declaration
@@ -89,7 +102,7 @@ Implementation:
 // constructor "usesResource("TFileService");"
 // This will improve performance in multithreaded jobs.
 
-class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources, edm::one::WatchRuns>  {
+class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources>  {
   public:
     explicit BasicPatDistrib(const edm::ParameterSet&);
     ~BasicPatDistrib();
@@ -104,16 +117,13 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources, e
 
   private:
     virtual void beginJob() override;
-    virtual void beginRun(edm::Run const&, edm::EventSetup const&) override;
     virtual void analyze(const edm::Event&, const edm::EventSetup&) override;
-    virtual void endRun(edm::Run const&, edm::EventSetup const&) override;
     virtual void endJob() override;
 
     bool isLooseElec(const pat::Electron & patEl, edm::Handle<reco::ConversionCollection> conversions, const reco::BeamSpot beamspot); 
     bool isMediumElec(const pat::Electron & patEl, edm::Handle<reco::ConversionCollection> conversions, const reco::BeamSpot beamspot); 
     bool isTightElec(const pat::Electron & patEl, edm::Handle<reco::ConversionCollection> conversions, const reco::BeamSpot beamspot); 
     bool isME0MuonSel(reco::Muon, double pullXCut, double dXCut, double pullYCut, double dYCut, double dPhi);
-    bool isME0MuonSelNew(reco::Muon, double, double, double);
 
     // ----------member data ---------------------------
     edm::Service<TFileService> fs_;
@@ -129,8 +139,9 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources, e
     PFJetIDSelectionFunctor jetIDTight_;
     edm::EDGetTokenT<std::vector<pat::MET>> metsToken_;
     edm::EDGetTokenT<std::vector<pat::PackedGenParticle>> genPartsToken_;
+    edm::EDGetTokenT<std::vector<reco::GenParticle>> allGenPartsToken_;
     edm::EDGetTokenT<std::vector<reco::GenJet>> genJetsToken_;
-    const ME0Geometry* ME0Geometry_; 
+    edm::EDGetTokenT<std::vector<pat::Photon>> photonsToken_;
 
     // MC truth in fiducial phase space
     TH1D* h_genMuons_n_;
@@ -195,7 +206,6 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources, e
     TH1D* h_goodJets_phi_;
     TH1D* h_goodJets_eta_;
     TH1D* h_goodJets_csv_;
-    TH2D* h_goodJets_nhFrac_pFrac_;
     TH1D* h_goodLJets_n_;
     TH1D* h_goodLJets_nb_;
     TH1D* h_goodLJets_pt_;
@@ -208,9 +218,108 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources, e
     TH1D* h_goodBJets_phi_;
     TH1D* h_goodBJets_eta_;
     TH1D* h_goodBJets_csv_;
-
+    //Sam added recoJet histos
+    TH1D* h_goodrecoJetBJets_Higgs_n_;
+    TH1F* h_recobjetHiggsMass_;
+    
     TH1D* h_goodMET_pt_;
     TH1D* h_goodMET_phi_;      
+
+    //Photons! Incorporated from PatPhotonSimpleAnalyzer.h (see .cc file in the intro)    
+    //std::string outputFile_;   // output file
+    double minPhotonEt_;       // minimum photon Et
+    double minPhotonAbsEta_;   // min and
+    double maxPhotonAbsEta_;   // max abs(eta)
+    double minPhotonR9_;       // minimum R9 = E(3x3)/E(SuperCluster)
+    double maxPhotonHoverE_;   // maximum HCAL / ECAL
+    double maxIetaIeta_;       // min sigma Ieta Ieta... ECAL crystal location
+    bool   createPhotonTTree_; // Create a TTree of photon variables
+
+    // Will be used for creating TTree of photons.
+    // These names did not have to match those from a phtn->...
+    // but do match for clarity.
+    struct struct_recPhoton {
+        float isolationEcalRecHit;
+        float isolationHcalRecHit;
+        float isolationSolidTrkCone;
+        float isolationHollowTrkCone;
+        float nTrkSolidCone;
+        float nTrkHollowCone;
+        float isEBGap;
+        float isEEGap;
+        float isEBEEGap;
+        float r9;
+        float et;
+        float eta;
+        float phi;
+        float hadronicOverEm;
+        float ecalIso;
+        float hcalIso;
+        float trackIso;
+    } ;
+    struct_recPhoton recPhoton;
+
+    float genPhoton1_pt, genPhoton1_eta, genPhoton1_phi;
+    float genPhoton2_pt, genPhoton2_eta, genPhoton2_phi;
+    float genPhotonDble_mass;
+    float genBJetDble_Higgs_mass;
+    float patGenBJetDble_Higgs_mass;
+    float recoJetGenBJetDble_Higgs_mass;
+    size_t nGenPhotons, nGenB, nPatGenB, nrecoJetGenB;
+    
+    TLorentzVector genPhoton1, genPhoton2, genHiggs1, genB1, genB2, genHiggs2, patGenB1,patGenB2, recoJetGenB1, recoJetGenB2, patGenHiggs2, recoJetGenHiggs1, recoJetGenHiggs2;
+    // root file to store histograms
+    //TFile*  rootFile_;
+
+    // data members for histograms to be filled
+
+    // PhotonID Histograms
+    TH1F* h_isoEcalRecHit_;
+    TH1F* h_isoHcalRecHit_;
+    TH1F* h_trk_pt_solid_;
+    TH1F* h_trk_pt_hollow_;
+    TH1F* h_ntrk_solid_;
+    TH1F* h_ntrk_hollow_;
+    TH1F* h_ebgap_;
+    TH1F* h_eeGap_;
+    TH1F* h_ebeeGap_;
+    TH1F* h_r9_;
+
+    // Photon Histograms
+    TH1F* h_photonEt_;
+    TH1F* h_photonEta_;
+    TH1F* h_photonPhi_;
+    TH1F* h_hadoverem_;
+    TH1F* h_photonIetaIeta_;
+    TH1F* h_phoIsoNeuHad_;
+    TH1F* h_phoIsoCharHad_;
+    TH1F* h_photonIso_;
+    TH1F* h_puppiPhoIsoNeuHad_;
+    TH1F* h_puppiPhoIsoCharHad_;
+    TH1F* h_puppiPhotonIso_;
+
+    // Photon's SuperCluster Histograms
+    TH1F* h_photonScEt_;
+    TH1F* h_photonScEta_;
+    TH1F* h_photonScPhi_;
+    TH1F* h_photonScEtaWidth_;
+
+    // Composite or Other Histograms
+    TH1F* h_photonInAnyGap_;
+    TH1F* h_nPassingPho_;
+    TH1F* h_nPho_;
+    TH1F* h_bjetHiggsMass_;
+    TH1F* h_patGenbjetHiggsMass_;
+    TH1D* h_goodBJets_Higgs_n_;
+    TH1D* h_goodPatBJets_Higgs_n_;
+
+    // TProfile
+    TProfile* tp_photonIso_nVtx_;
+
+    // TTree
+    TTree* tree_PhotonAll_;
+    TTree* tree_genPhotonAll_;
+
 };
 
 //
@@ -236,8 +345,33 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   jetIDTight_(PFJetIDSelectionFunctor::FIRSTDATA, PFJetIDSelectionFunctor::TIGHT), 
   metsToken_(consumes<std::vector<pat::MET>>(iConfig.getParameter<edm::InputTag>("mets"))),
   genPartsToken_(consumes<std::vector<pat::PackedGenParticle>>(iConfig.getParameter<edm::InputTag>("genParts"))),
-  genJetsToken_(consumes<std::vector<reco::GenJet>>(iConfig.getParameter<edm::InputTag>("genJets"))) 
+  allGenPartsToken_(consumes<std::vector<reco::GenParticle>>(iConfig.getParameter<edm::InputTag>("allGenParts"))),
+  genJetsToken_(consumes<std::vector<reco::GenJet>>(iConfig.getParameter<edm::InputTag>("genJets"))),
+  photonsToken_(consumes<std::vector<pat::Photon>>(iConfig.getParameter<edm::InputTag>("photons"))),
+  minPhotonEt_(iConfig.getParameter<double>("minPhotonEt")),
+  minPhotonAbsEta_(iConfig.getParameter<double>("minPhotonAbsEta")),
+  maxPhotonAbsEta_(iConfig.getParameter<double>("maxPhotonAbsEta")),
+  minPhotonR9_(iConfig.getParameter<double>("minPhotonR9")),
+  maxPhotonHoverE_(iConfig.getParameter<double>("maxPhotonHoverE")),
+  maxIetaIeta_(iConfig.getParameter<double>("maxIetaIeta"))
+  //outputFile_(iConfig.getParameter<std::string>("outputFile"))
 {
+  //Photon PATS 
+  // Read Parameters from configuration file
+
+  // output filename
+  // Read variables that must be passed to allow a
+  //  supercluster to be placed in histograms as a photon.
+  
+  // Read variable to that decidedes whether
+  // a TTree of photons is created or not
+  createPhotonTTree_ = iConfig.getParameter<bool>("createPhotonTTree");
+  std::cout<<"Hello User I am running!"<<std::endl;
+  // open output file to store histograms
+  //rootFile_ = TFile::Open(outputFile_.c_str(),"RECREATE");
+
+
+
   //now do what ever initialization is needed
   usesResource("TFileService");
 
@@ -324,7 +458,6 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   h_goodJets_phi_ = fs_->make<TH1D>("GoodJetsPhi",";#phi(jet);Events / 0.1", 60, -3., 3.);
   h_goodJets_eta_ = fs_->make<TH1D>("GoodJetsEta",";#eta(jet);Events / 0.1", 100, -5., 5.);
   h_goodJets_csv_ = fs_->make<TH1D>("GoodJetsCSV",";CSV discriminant;Events / 0.02", 50, 0., 1.);
-  h_goodJets_nhFrac_pFrac_ = fs_->make<TH2D>("GoodJetsNeutralHadronFractionPhotonFraction",";neutral hadron frac.;photon frac.;", 50, 0., 1., 50., 0., 1.);
   h_goodLJets_n_ = fs_->make<TH1D>("GoodLightJetsN",";Jet multiplicity;Events / 1", 12, 0., 12.);
   h_goodLJets_nb_ = fs_->make<TH1D>("GoodLightJetsNb",";b jet multiplicity;Events / 1", 5, 0., 5.);
   h_goodLJets_pt_ = fs_->make<TH1D>("GoodLightJetsPt",";p_{T}(jet) (GeV);Events / (2 GeV)", 90, 20., 200.);
@@ -337,12 +470,79 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   h_goodBJets_phi_ = fs_->make<TH1D>("GoodBtaggedJetsPhi",";#phi(jet);Events / 0.2", 30, -3., 3.);
   h_goodBJets_eta_ = fs_->make<TH1D>("GoodBtaggedJetsEta",";#eta(jet);Events / 0.2", 50, -5., 5.);
   h_goodBJets_csv_ = fs_->make<TH1D>("GoodBtaggedJetsCSV",";CSV discriminant;Events / 0.01", 20, 0.8, 1.);
+  //Sam added reco jets 
+  h_goodrecoJetBJets_Higgs_n_ = fs_->make<TH1D>("GoodRecoBtaggedJetsN_R2_Selection",";Jet multiplicity;Events / 1", 5, 0., 5.);
+  h_recobjetHiggsMass_ = fs_->make<TH1F>("recoBJetDble_Higgs_Mass", "genBJetDble_Higgs_mass",10000,1e9,500e9);
 
   // MET
   h_goodMET_pt_ = fs_->make<TH1D>("GoodMETPt",";p_{T}(MET) (GeV);Events / (5 GeV)", 60, 0., 300.);
   h_goodMET_phi_ = fs_->make<TH1D>("GoodMETPhi",";#phi(MET);Events / 0.2", 30, -3., 3.);
 
+  // PhotonID Histograms
+  h_isoEcalRecHit_ = fs_->make<TH1F>("photonEcalIso",          "Ecal Rec Hit Isolation", 100, 0, 100);
+  h_isoHcalRecHit_ = fs_->make<TH1F>("photonHcalIso",          "Hcal Rec Hit Isolation", 100, 0, 100);
+  h_trk_pt_solid_  = fs_->make<TH1F>("photonTrackSolidIso",    "Sum of track pT in a cone of #DeltaR" , 100, 0, 100);
+  h_trk_pt_hollow_ = fs_->make<TH1F>("photonTrackHollowIso",   "Sum of track pT in a hollow cone" ,     100, 0, 100);
+  h_ntrk_solid_    = fs_->make<TH1F>("photonTrackCountSolid",  "Number of tracks in a cone of #DeltaR", 100, 0, 100);
+  h_ntrk_hollow_   = fs_->make<TH1F>("photonTrackCountHollow", "Number of tracks in a hollow cone",     100, 0, 100);
+  h_ebgap_         = fs_->make<TH1F>("photonInEBgap",          "Ecal Barrel gap flag",  2, -0.5, 1.5);
+  h_eeGap_         = fs_->make<TH1F>("photonInEEgap",          "Ecal Endcap gap flag",  2, -0.5, 1.5);
+  h_ebeeGap_       = fs_->make<TH1F>("photonInEEgap",          "Ecal Barrel/Endcap gap flag",  2, -0.5, 1.5);
+  h_r9_            = fs_->make<TH1F>("photonR9",               "R9 = E(3x3) / E(SuperCluster)", 300, 0, 3);
 
+  // Photon Histograms
+  h_photonEt_      = fs_->make<TH1F>("photonEt",     "Photon E_{T}",  200,  0, 200);
+  h_photonEta_     = fs_->make<TH1F>("photonEta",    "Photon #eta",   200, -4,   4);
+  h_photonPhi_     = fs_->make<TH1F>("photonPhi",    "Photon #phi",   200, -1.*TMath::Pi(), TMath::Pi());
+  h_hadoverem_     = fs_->make<TH1F>("photonHoverE", "Hadronic over EM", 200, 0, 1);
+  h_photonIetaIeta_ = fs_->make<TH1F>("photonSigmaIetaIeta","Photon #sigma_{i#etai#eta}",1500,0.0,0.3),
+  h_phoIsoNeuHad_ = fs_->make<TH1F>("photonIsolatedNeuHadron","Isolated Photon by Neutral Hadron",100,0.0,140.0),
+  h_phoIsoCharHad_ = fs_->make<TH1F>("photonIsolatedCharHadron","Isolated Photon by Charged Hadron",100,0.0,250.0),
+  h_photonIso_ = fs_->make<TH1F>("photonIsolated","Isolated Photon",100,0.0,200.0),
+  h_puppiPhoIsoNeuHad_ = fs_->make<TH1F>("puppiPhotonIsolatedNeuHadron","Isolated Photon by Neutral Hadron PUPPI",100,0.0,140.0),
+  h_puppiPhoIsoCharHad_ = fs_->make<TH1F>("puppiPhotonIsolatedCharHadron","Isolated Photon by Charged Hadron PUPPI",100,0.0,250.0),
+  h_puppiPhotonIso_ = fs_->make<TH1F>("puppiPhotonIsolated","Isolated Photon PUPPI",100,0.0,200.0),
+
+  // Photon's SuperCluster Histograms
+  h_photonScEt_       = fs_->make<TH1F>("photonScEt",  "Photon SuperCluster E_{T}", 200,  0, 200);
+  h_photonScEta_      = fs_->make<TH1F>("photonScEta", "Photon #eta",               200, -4,   4);
+  h_photonScPhi_      = fs_->make<TH1F>("photonScPhi", "Photon #phi", 200, -1.*TMath::Pi(), TMath::Pi());
+  h_photonScEtaWidth_ = fs_->make<TH1F>("photonScEtaWidth","#eta-width",            100,  0,  .1);
+
+  // Composite or Other Histograms
+  h_photonInAnyGap_   = fs_->make<TH1F>("photonInAnyGap",     "Photon in any gap flag",  2, -0.5, 1.5);
+  h_nPassingPho_      = fs_->make<TH1F>("photonPassingCount", "Total number photons (0=NotPassing, 1=Passing)", 2, -0.5, 1.5);
+  h_nPho_             = fs_->make<TH1F>("photonCount",        "Number of photons passing cuts in event",  10,  0,  10);
+  tp_photonIso_nVtx_ = fs_->make<TProfile>("photonsNVtx","photon and Number of Vertices",1000,0.,220.,0.,100.);
+  //Bjets invariant mass distribution. 
+  h_goodBJets_Higgs_n_ = fs_->make<TH1D>("GoodBtaggedJetsN_R2_Selection",";Jet multiplicity;Events / 1", 5, 0., 5.);
+  h_goodPatBJets_Higgs_n_ = fs_->make<TH1D>("GoodBtaggedJetsN_R2_Selection",";Jet multiplicity;Events / 1", 5, 0., 5.);
+  h_bjetHiggsMass_ = fs_->make<TH1F>("genBJetDble_Higgs_Mass", "genBJetDble_Higgs_mass",10000,1e9,500e9);
+  h_patGenbjetHiggsMass_ = fs_->make<TH1F>("patgenBJetDble_Higgs_Mass", "patgenBJetDble_Higgs_mass",10000,1e9,500e9);
+
+
+
+  // Create a TTree of photons if set to 'True' in config file
+  if ( createPhotonTTree_ ) {
+    tree_PhotonAll_     = fs_->make<TTree>("TreePhotonAll", "Reconstructed Photon");
+    tree_PhotonAll_->Branch("recPhoton", &recPhoton.isolationEcalRecHit, "isolationEcalRecHit/F:isolationHcalRecHit:isolationSolidTrkCone:isolationHollowTrkCone:nTrkSolidCone:nTrkHollowCone:isEBGap:isEEGap:isEBEEGap:r9:et:eta:phi:hadronicOverEm:ecalIso:hcalIso:trackIso");
+
+
+    tree_genPhotonAll_     = fs_->make<TTree>("TreeGenPhotonAll", "Generated Photon from Higgs");
+    tree_genPhotonAll_->Branch("genPhoton1_pt", &genPhoton1_pt, "genPhoton1_pt/F");
+    tree_genPhotonAll_->Branch("genPhoton1_eta", &genPhoton1_eta, "genPhoton1_eta/F");
+    tree_genPhotonAll_->Branch("genPhoton1_phi", &genPhoton1_phi, "genPhoton1_phi/F");
+
+    tree_genPhotonAll_->Branch("genPhoton2_pt", &genPhoton2_pt, "genPhoton2_pt/F");
+    tree_genPhotonAll_->Branch("genPhoton2_eta", &genPhoton2_eta, "genPhoton2_eta/F");
+    tree_genPhotonAll_->Branch("genPhoton2_phi", &genPhoton2_phi, "genPhoton2_phi/F");
+ 
+
+    tree_genPhotonAll_->Branch("nGenPhotons", &nGenPhotons, "nGenPhotons/I");
+    tree_genPhotonAll_->Branch("nGenB", &nGenB, "nGenB/I");
+    
+    tree_genPhotonAll_->Branch("genPhotonDouble_Mass", &genPhotonDble_mass, "genPhotonDble_mass/I");
+  }
 }
 
 
@@ -351,6 +551,7 @@ BasicPatDistrib::~BasicPatDistrib()
 
   // do anything here that needs to be done at desctruction time
   // (e.g. close files, deallocate resources etc.)
+  //delete rootFile_;
 
 }
 
@@ -363,8 +564,10 @@ BasicPatDistrib::~BasicPatDistrib()
   void
 BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 {
-   using namespace edm;
-
+  //scope   
+  using namespace edm;
+  using namespace std;
+  //Gathering Physics Objects 
   Handle<std::vector<reco::Vertex>> vertices;
   iEvent.getByToken(verticesToken_, vertices);
 
@@ -388,8 +591,28 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
   Handle<std::vector<pat::PackedGenParticle>> genParts;
   iEvent.getByToken(genPartsToken_, genParts);
 
+  Handle<std::vector<reco::GenParticle>> allGenParts;//Photon H mass is computed
+  iEvent.getByToken(allGenPartsToken_, allGenParts);
+
+
   Handle<std::vector<reco::GenJet>> genJets;
   iEvent.getByToken(genJetsToken_, genJets);
+
+  //Handle< View<pat::Photon> >  photonHandle;
+  //iEvent.getByLabel("slimmedPhotons", photonHandle);
+  //View<pat::Photon> photons = *photonHandle; 
+  
+  Handle<std::vector<pat::Photon>>  photonHandle;
+  iEvent.getByToken(photonsToken_, photonHandle);
+  std::vector<pat::Photon> photons = *photonHandle; 
+
+  genPhoton1_pt=0, genPhoton1_eta=0, genPhoton1_phi=0;
+  genPhoton2_pt=0, genPhoton2_eta=0, genPhoton2_phi=0;
+  //genHiggs_pt=0,genHiggs_eta=0,genHiggs_phi=0;
+  genPhotonDble_mass=0;
+  genBJetDble_Higgs_mass=0;
+  patGenBJetDble_Higgs_mass=0;
+  nGenPhotons = 0, nGenB = 0;
 
   // Vertices
   int prVtx = -1;
@@ -427,6 +650,87 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
     ++nGenJets;
   }
   h_genJets_n_->Fill(nGenJets);
+  
+  for (size_t i = 0; i < allGenParts->size(); i++) {
+
+    if (allGenParts->at(i).pdgId() != 22 && abs(allGenParts->at(i).pdgId()) != 5) continue;
+
+    /*
+    if (allGenParts->at(i).numberOfMothers() == 0) cout << i << " \t \t" << allGenParts->at(i).pdgId() << " st " << allGenParts->at(i).status()<< endl;
+    if (allGenParts->at(i).numberOfMothers() == 1) cout << i << " " <<  allGenParts->at(i).mother(0)->pdgId() << " \t " << allGenParts->at(i).pdgId() << " st " << allGenParts->at(i).status() << endl;
+    if (allGenParts->at(i).numberOfMothers() == 2) cout << i << " " << allGenParts->at(i).mother(0)->pdgId() << " " << allGenParts->at(i).mother(1)->pdgId() << " " << allGenParts->at(i).pdgId() << " st " << allGenParts->at(i).status() << endl;
+    */
+    //    if (fabs(allGenParts->at(i).eta()) >  1.479) continue;
+    size_t nMothers = allGenParts->at(i).numberOfMothers();
+    /* 
+   if (nMothers > 1) {
+      cout << "=================================== PDG ID = " << allGenParts->at(i).mother(0)->pdgId() << endl;
+      cout << "=================================== PDG ID = " << allGenParts->at(i).mother(1)->pdgId() << endl;
+      cout << "" << endl << endl;
+    }
+    */
+    //Adding cuts for GenPhotons.... 
+
+
+
+
+    if (nMothers==1){
+      if (allGenParts->at(i).mother(0)->pdgId() != 25) continue;
+      //      cout << "PDG ID = " << allGenParts->at(i).mother(0)->pdgId() << endl;
+      if (allGenParts->at(i).pdgId() == 22) {
+	nGenPhotons++;
+	if (nGenPhotons == 1){
+	  genPhoton1_pt = allGenParts->at(i).pt();
+	  genPhoton1_eta = allGenParts->at(i).eta();
+	  genPhoton1_phi = allGenParts->at(i).pt();
+      genPhoton1.SetPtEtaPhiM(genPhoton1_pt, genPhoton1_eta, genPhoton1_phi, 0);
+	} else if (nGenPhotons == 2){
+	  genPhoton2_pt = allGenParts->at(i).pt();
+	  genPhoton2_eta = allGenParts->at(i).eta();
+	  genPhoton2_phi = allGenParts->at(i).pt();
+      genPhoton2.SetPtEtaPhiM(genPhoton2_pt, genPhoton2_eta, genPhoton2_phi, 0);
+      genHiggs1 = genPhoton1+genPhoton2;
+      genPhotonDble_mass = genHiggs1.M();
+      //genPhotonDble_mass = TMath::Sqrt(2*genPhoton1_pt*genPhoton2_pt*(TMath::CosH(genPhoton1_eta-genPhoton2_eta)-TMath::Cos(genPhoton1_phi-genPhoton2_phi)));
+	}
+      } else if (abs(allGenParts->at(i).pdgId()) == 5) {
+      //B-Jets
+	  nGenB++;
+      //double btagDisc = -1.;
+      if (useDeepCSV_){
+          //btagDisc = jets->at(i).bDiscriminator("pfDeepCSVJetTags:probb") +
+              //jets->at(i).bDiscriminator("pfDeepCSVJetTags:probbb");
+        }
+      else{
+           //btagDisc = jets->at(i).bDiscriminator("pfCombinedInclusiveSecondaryVertexV2BJetTags");
+        }
+	  if (nGenB == 1){
+      if (useDeepCSV_){ //&& btagDisc > 0.131)
+            //|| (!useDeepCSV_ && btagDisc > 0.8484))  
+        genB1.SetPtEtaPhiM(allGenParts->at(i).pt(),allGenParts->at(i).eta(), allGenParts->at(i).phi(), allGenParts->at(i).mass());
+            }
+      }
+	  else if (nGenB == 2){
+        genB2.SetPtEtaPhiM(allGenParts->at(i).pt(),allGenParts->at(i).eta(), allGenParts->at(i).phi(), allGenParts->at(i).mass());
+        genHiggs2 = genB1+genB2;
+        genBJetDble_Higgs_mass = genHiggs2.M();
+        h_bjetHiggsMass_->Fill(genBJetDble_Higgs_mass);
+        std::cout<<"Found a Higgs from Bjet!"<<std::endl;
+        }
+      }      
+    //End 1Mother
+    }
+  //End loop over allGen particles 
+  }
+
+  
+  h_goodBJets_Higgs_n_->Fill(nGenB);
+
+
+  //Gen Particles Histograms 
+  if (createPhotonTTree_)
+    tree_genPhotonAll_->Fill();
+    
 
   size_t nGenMuons = 0;
   size_t nGenElecs = 0;
@@ -463,7 +767,36 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
       h_genElecs_iso_->Fill(genIso); 
       ++nGenElecs;
     }
+    else if (abs(genParts->at(i).pdgId()) == 5) {
+      //B-Jets
+	  nPatGenB++;
+      //double btagDisc = -1.;
+      if (useDeepCSV_){
+          //btagDisc = jets->at(i).bDiscriminator("pfDeepCSVJetTags:probb") +
+              //jets->at(i).bDiscriminator("pfDeepCSVJetTags:probbb");
+        }
+      else{
+           //btagDisc = jets->at(i).bDiscriminator("pfCombinedInclusiveSecondaryVertexV2BJetTags");
+        }
+	  if (nPatGenB == 1){
+      if (useDeepCSV_ )//&& btagDisc > 0.131) //|| (!useDeepCSV_ && btagDisc > 0.8484))  //0.6324
+        {
+        patGenB1.SetPtEtaPhiM(genJets->at(i).pt(),genJets->at(i).eta(), genJets->at(i).phi(), genJets->at(i).mass());
+        }
+      }
+	  else if (nGenB == 2){
+        patGenB2.SetPtEtaPhiM(genJets->at(i).pt(),genJets->at(i).eta(), genJets->at(i).phi(), genJets->at(i).mass());
+        patGenHiggs2 = patGenB1+patGenB2;
+        patGenBJetDble_Higgs_mass = patGenHiggs2.M();
+        h_patGenbjetHiggsMass_->Fill(patGenBJetDble_Higgs_mass);
+
+        }
+      }
+
   }
+
+  h_goodPatBJets_Higgs_n_->Fill(nPatGenB);
+
   h_genMuons_n_->Fill(nGenMuons);
   h_genElecs_n_->Fill(nGenElecs);
 
@@ -474,36 +807,15 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
     h_allMuons_phi_->Fill(muons->at(i).phi());
     h_allMuons_eta_->Fill(muons->at(i).eta());
     h_allMuons_iso_->Fill((muons->at(i).puppiNoLeptonsChargedHadronIso() + muons->at(i).puppiNoLeptonsNeutralHadronIso() + muons->at(i).puppiNoLeptonsPhotonIso()) / muons->at(i).pt());
-
-    // Loose ID
-    double dPhiCut = std::min(std::max(1.2/muons->at(i).p(),1.2/100),0.056);
-    double dPhiBendCut = std::min(std::max(0.2/muons->at(i).p(),0.2/100),0.0096);    
-    bool isLooseMuon = (fabs(muons->at(i).eta()) < 2.4 && muon::isLooseMuon(muons->at(i))) || (fabs(muons->at(i).eta()) > 2.4 && isME0MuonSelNew(muons->at(i), 0.077, dPhiCut, dPhiBendCut));
-
-    // Medium ID -- needs to be updated
-    bool ipxy = false, ipz = false, validPxlHit = false, highPurity = false;
-    if (muons->at(i).innerTrack().isNonnull()){
-    	ipxy = std::abs(muons->at(i).muonBestTrack()->dxy(vertices->at(prVtx).position())) < 0.2;
-    	ipz = std::abs(muons->at(i).muonBestTrack()->dz(vertices->at(prVtx).position())) < 0.5;
-    	validPxlHit = muons->at(i).innerTrack()->hitPattern().numberOfValidPixelHits() > 0;
-    	highPurity = muons->at(i).innerTrack()->quality(reco::Track::highPurity);
-    }    
-    bool isMediumMuon = (fabs(muons->at(i).eta()) < 2.4 && muon::isMediumMuon(muons->at(i))) || (fabs(muons->at(i).eta()) > 2.4 && isME0MuonSelNew(muons->at(i), 0.077, dPhiCut, dPhiBendCut) && ipxy && ipz && validPxlHit && highPurity);
-
-    // Tight ID
-    dPhiCut = std::min(std::max(1.2/muons->at(i).p(),1.2/100),0.032);
-    dPhiBendCut = std::min(std::max(0.2/muons->at(i).p(),0.2/100),0.0041);
-    bool isTightMuon = (fabs(muons->at(i).eta()) < 2.4 && vertices->size() > 0 && muon::isTightMuon(muons->at(i),vertices->at(prVtx))) || (fabs(muons->at(i).eta()) > 2.4 && isME0MuonSelNew(muons->at(i), 0.048, dPhiCut, dPhiBendCut) && ipxy && ipz && validPxlHit && highPurity);
-
     h_allMuons_id_->Fill(0.);
-    if (isLooseMuon) h_allMuons_id_->Fill(1.);
-    if (isMediumMuon) h_allMuons_id_->Fill(2.);
-    if (isTightMuon) h_allMuons_id_->Fill(3.);
+    if ((fabs(muons->at(i).eta()) < 2.4 && muon::isLooseMuon(muons->at(i))) || (fabs(muons->at(i).eta()) > 2.4 && isME0MuonSel(muons->at(i), 3, 4, 3, 4, 0.5))) h_allMuons_id_->Fill(1.);
+    if ((fabs(muons->at(i).eta()) < 2.4 && muon::isMediumMuon(muons->at(i))) || (fabs(muons->at(i).eta()) > 2.4 && isME0MuonSel(muons->at(i), 3, 4, 3, 4, 0.3))) h_allMuons_id_->Fill(2.);
+    if ((fabs(muons->at(i).eta()) < 2.4 && vertices->size() > 0 && muon::isTightMuon(muons->at(i),vertices->at(prVtx))) || (fabs(muons->at(i).eta()) > 2.4 && isME0MuonSel(muons->at(i), 3, 4, 3, 4, 0.1))) h_allMuons_id_->Fill(3.);
 
     if (muons->at(i).pt() < 26.) continue;
     if (fabs(muons->at(i).eta()) > 2.8) continue;
     if ((muons->at(i).puppiNoLeptonsChargedHadronIso() + muons->at(i).puppiNoLeptonsNeutralHadronIso() + muons->at(i).puppiNoLeptonsPhotonIso()) / muons->at(i).pt() > 0.15) continue;
-    if (!isTightMuon) continue;
+    if ((fabs(muons->at(i).eta()) < 2.4 && (vertices->size() <= 0 || !muon::isTightMuon(muons->at(i),vertices->at(prVtx)))) || (fabs(muons->at(i).eta()) > 2.4 && !isME0MuonSel(muons->at(i), 3, 4, 3, 4, 0.1))) continue;
     h_goodMuons_pt_->Fill(muons->at(i).pt());
     h_goodMuons_phi_->Fill(muons->at(i).phi());
     h_goodMuons_eta_->Fill(muons->at(i).eta());
@@ -588,8 +900,8 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
     h_goodJets_phi_->Fill(jets->at(i).phi());
     h_goodJets_eta_->Fill(jets->at(i).eta());
     h_goodJets_csv_->Fill(btagDisc); 
-    h_goodJets_nhFrac_pFrac_->Fill(jets->at(i).neutralHadronEnergyFraction(), jets->at(i).photonEnergyFraction());
     ++nGoodJets;
+    //size_t nJetMother = jets->at(i).numberOfMothers();
     if (jets->at(i).genParton() && fabs(jets->at(i).genParton()->pdgId()) == 5) ++nbGoodJets;
     if ((useDeepCSV_ && btagDisc > 0.6324)
             || (!useDeepCSV_ && btagDisc > 0.8484)){  
@@ -607,7 +919,36 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
       ++nGoodLightJets;
       if (jets->at(i).genParton() && fabs(jets->at(i).genParton()->pdgId()) == 5) ++nbGoodLightJets;
     }
+//Added Sam code
+   // if (abs(jets->at(i).genParton()->pdgId()) == 5) {
+   //   //B-Jets
+   //   nrecoJetGenB++;
+   //   //double btagDisc = -1.;
+   //   if (useDeepCSV_){
+   //       //btagDisc = jets->at(i).bDiscriminator("pfDeepCSVJetTags:probb") +
+   //           //jets->at(i).bDiscriminator("pfDeepCSVJetTags:probbb");
+   //     }
+   //   else{
+   //        //btagDisc = jets->at(i).bDiscriminator("pfCombinedInclusiveSecondaryVertexV2BJetTags");
+   //     }
+   //   if (nrecoJetGenB == 1){
+   //   if (useDeepCSV_ )//&& btagDisc > 0.131) //|| (!useDeepCSV_ && btagDisc > 0.8484))  //0.6324
+   //     {
+   //     recoJetGenB1.SetPtEtaPhiM(genJets->at(i).pt(),genJets->at(i).eta(), genJets->at(i).phi(), genJets->at(i).mass());
+   //     }
+   //   }
+   //   else if (nrecoJetGenB == 2){
+   //     recoJetGenB2.SetPtEtaPhiM(genJets->at(i).pt(),genJets->at(i).eta(), genJets->at(i).phi(), genJets->at(i).mass());
+   //     recoJetGenHiggs2 = recoJetGenB1+recoJetGenB2;
+   //     recoJetGenBJetDble_Higgs_mass = recoJetGenHiggs2.M();
+   //     h_recobjetHiggsMass_->Fill(recoJetGenBJetDble_Higgs_mass);
+
+   //     }
+   //   }
+
+
   }
+  h_goodrecoJetBJets_Higgs_n_->Fill(nrecoJetGenB);
   h_goodLJets_n_->Fill(nGoodLightJets);
   h_goodLJets_nb_->Fill(nbGoodLightJets);
   h_goodBJets_n_->Fill(nGoodBtaggedJets);
@@ -622,12 +963,143 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
     h_goodMET_phi_->Fill(mets->at(0).phi());
   }
 
+  // Photons
+  int photonCounter = 0;
+
+
+  for (int i=0; i<int(photons.size()); i++)
+  {
+
+    pat::Photon currentPhoton = photons.at(i);
+
+    float photonEt       = currentPhoton.et();
+    float photonPt       = currentPhoton.pt();
+    float superClusterEt = (currentPhoton.superCluster()->energy())/(cosh(currentPhoton.superCluster()->position().eta()));
+    float phoIsoNeuHad = currentPhoton.neutralHadronIso();
+    float phoIsoCharHad = currentPhoton.chargedHadronIso();
+    float photonIso = currentPhoton.photonIso();
+    float puppiPhoIsoNeuHad = currentPhoton.puppiNeutralHadronIso();
+    float puppiPhoIsoCharHad = currentPhoton.puppiChargedHadronIso();
+    float puppiPhotonIso = currentPhoton.puppiPhotonIso();
+
+
+    // Only store photon candidates (SuperClusters) that pass some simple cuts
+    bool passCuts = //(              photonEt < minPhotonEt_ ) &&
+       //             (      fabs(currentPhoton.eta()) > minPhotonAbsEta_ ) &&
+                    (      fabs(currentPhoton.eta()) < maxPhotonAbsEta_ ) &&
+           //         (          currentPhoton.r9() > minPhotonR9_     ) &&
+                   ( currentPhoton.hadronicOverEm() < maxPhotonHoverE_ ) &&
+                   ( currentPhoton.sigmaIetaIeta() < maxIetaIeta_ ) &&
+                   ( phoIsoCharHad < 1.295) &&
+                   ( phoIsoNeuHad < 10.910+0.0148*photonPt+0.000017*TMath::Power(photonPt,2)) &&
+                   ( photonIso <  3.630+0.0047*photonPt ) ;
+                       
+
+    if ( passCuts )
+    {
+      ///////////////////////////////////////////////////////
+      //                fill histograms                    //
+      ///////////////////////////////////////////////////////
+      // PhotonID Variables
+      h_isoEcalRecHit_->Fill(currentPhoton.ecalRecHitSumEtConeDR04());
+      h_isoHcalRecHit_->Fill(currentPhoton.hcalTowerSumEtConeDR04());
+      h_trk_pt_solid_ ->Fill(currentPhoton.trkSumPtSolidConeDR04());
+      h_trk_pt_hollow_->Fill(currentPhoton.trkSumPtHollowConeDR04());
+      h_ntrk_solid_->   Fill(currentPhoton.nTrkSolidConeDR04());
+      h_ntrk_hollow_->  Fill(currentPhoton.nTrkHollowConeDR04());
+      h_ebgap_->        Fill(currentPhoton.isEBGap());
+      h_eeGap_->        Fill(currentPhoton.isEEGap());
+      h_ebeeGap_->      Fill(currentPhoton.isEBEEGap());
+      h_r9_->           Fill(currentPhoton.r9());
+
+      // Photon Variables
+      h_photonEt_->  Fill(photonEt);
+      h_photonEta_-> Fill(currentPhoton.eta());
+      h_photonPhi_-> Fill(currentPhoton.phi());
+      h_hadoverem_-> Fill(currentPhoton.hadronicOverEm());
+      h_photonIetaIeta_->Fill(currentPhoton.sigmaIetaIeta());
+
+      // Photon's SuperCluster Variables
+      // eta is with respect to detector (not physics) vertex,
+      // thus Et and eta are different from photon.
+      h_photonScEt_->      Fill(superClusterEt);
+      h_photonScEta_->     Fill(currentPhoton.superCluster()->position().eta());
+      h_photonScPhi_->     Fill(currentPhoton.superCluster()->position().phi());
+      h_photonScEtaWidth_->Fill(currentPhoton.superCluster()->etaWidth());
+
+      //Isolated Photon Variables
+      h_phoIsoNeuHad_->Fill(phoIsoNeuHad);
+      h_phoIsoCharHad_->Fill(phoIsoCharHad);
+      h_photonIso_->Fill(photonIso);
+      h_puppiPhoIsoNeuHad_->Fill(puppiPhoIsoNeuHad);
+      h_puppiPhoIsoCharHad_->Fill(puppiPhoIsoCharHad);
+      h_puppiPhotonIso_->Fill(puppiPhotonIso);
+      tp_photonIso_nVtx_->Fill(photonIso,nVtx,1);
+
+      // It passed photon cuts, mark it
+      h_nPassingPho_->Fill(1.0);
+
+
+      ///////////////////////////////////////////////////////
+      //                fill TTree (optional)              //
+      ///////////////////////////////////////////////////////
+      if ( createPhotonTTree_ ) {
+        recPhoton.isolationEcalRecHit    = currentPhoton.ecalRecHitSumEtConeDR04();
+        recPhoton.isolationHcalRecHit    = currentPhoton.hcalTowerSumEtConeDR04();
+        recPhoton.isolationSolidTrkCone  = currentPhoton.trkSumPtSolidConeDR04();
+        recPhoton.isolationHollowTrkCone = currentPhoton.trkSumPtHollowConeDR04();
+        recPhoton.nTrkSolidCone          = currentPhoton.nTrkSolidConeDR04();
+        recPhoton.nTrkHollowCone         = currentPhoton.nTrkHollowConeDR04();
+        recPhoton.isEBGap                = currentPhoton.isEBGap();
+        recPhoton.isEEGap                = currentPhoton.isEEGap();
+        recPhoton.isEBEEGap              = currentPhoton.isEBEEGap();
+        recPhoton.r9                     = currentPhoton.r9();
+        recPhoton.et                     = currentPhoton.et();
+        recPhoton.eta                    = currentPhoton.eta();
+        recPhoton.phi                    = currentPhoton.phi();
+        recPhoton.hadronicOverEm         = currentPhoton.hadronicOverEm();
+        recPhoton.ecalIso                = currentPhoton.ecalIso();
+        recPhoton.hcalIso                = currentPhoton.hcalIso();
+        recPhoton.trackIso               = currentPhoton.trackIso();
+
+        // Fill the tree (this records all the recPhoton.* since
+        // tree_PhotonAll_ was set to point at that.
+        tree_PhotonAll_->Fill();
+      }
+
+      // Record whether it was near any module gap.
+      // Very convoluted at the moment.
+      bool inAnyGap = currentPhoton.isEBEEGap() || (currentPhoton.isEB()&&currentPhoton.isEBGap()) || (currentPhoton.isEE()&&currentPhoton.isEEGap());
+      if (inAnyGap) {
+        h_photonInAnyGap_->Fill(1.0);
+      } else {
+        h_photonInAnyGap_->Fill(0.0);
+      }
+
+      photonCounter++;
+    }
+    else
+    {
+      // This didn't pass photon cuts, mark it
+      h_nPassingPho_->Fill(0.0);
+    }
+
+  } // End Loop over photons
+  //Setting the total number of photons
+  h_nPho_->Fill(photonCounter);
+
+
+
+  //Setting the TProfile parameters
+  tp_photonIso_nVtx_->GetXaxis()->SetTitle("# of Isolated Photons");
+  tp_photonIso_nVtx_->GetYaxis()->SetTitle("# of Verticies");
+
+
 }
 
 
-// ------------ method check that an e passes loose ID ----------------------------------
-  bool
-BasicPatDistrib::isLooseElec(const pat::Electron & patEl, edm::Handle<reco::ConversionCollection> conversions, const reco::BeamSpot beamspot) 
+// ------------ method check that an e passes loose id ----------------------------------
+  bool BasicPatDistrib::isLooseElec(const pat::Electron & patEl, edm::Handle<reco::ConversionCollection> conversions, const reco::BeamSpot beamspot) 
 {
   if (fabs(patEl.superCluster()->eta()) > 1.479 && fabs(patEl.superCluster()->eta()) < 1.556) return false;
   if (patEl.full5x5_sigmaIetaIeta() > 0.02992) return false;
@@ -707,11 +1179,11 @@ BasicPatDistrib::isME0MuonSel(reco::Muon muon, double pullXCut, double dXCut, do
 
         if (chamber->detector() == 5){
 
-          deltaX   = std::abs(chamber->x - segment->x);
-          deltaY   = std::abs(chamber->y - segment->y);
-          pullX    = std::abs(chamber->x - segment->x) / std::sqrt(chamber->xErr + segment->xErr);
-          pullY    = std::abs(chamber->y - segment->y) / std::sqrt(chamber->yErr + segment->yErr);
-          deltaPhi = std::abs(atan(chamber->dXdZ) - atan(segment->dXdZ));
+          deltaX   = fabs(chamber->x - segment->x);
+          deltaY   = fabs(chamber->y - segment->y);
+          pullX    = fabs(chamber->x - segment->x) / std::sqrt(chamber->xErr + segment->xErr);
+          pullY    = fabs(chamber->y - segment->y) / std::sqrt(chamber->yErr + segment->yErr);
+          deltaPhi = fabs(atan(chamber->dXdZ) - atan(segment->dXdZ));
 
         }
       }
@@ -729,82 +1201,60 @@ BasicPatDistrib::isME0MuonSel(reco::Muon muon, double pullXCut, double dXCut, do
 
 }
 
-bool 
-BasicPatDistrib::isME0MuonSelNew(reco::Muon muon, double dEtaCut, double dPhiCut, double dPhiBendCut)
-{
-
-  bool result = false;
-  bool isME0 = muon.isME0Muon();
-
-  if(isME0){
-
-    double deltaEta = 999;
-    double deltaPhi = 999;
-    double deltaPhiBend = 999;
-
-    const std::vector<reco::MuonChamberMatch>& chambers = muon.matches();
-    for( std::vector<reco::MuonChamberMatch>::const_iterator chamber = chambers.begin(); chamber != chambers.end(); ++chamber ){
-
-      if (chamber->detector() == 5){
-
-        for ( std::vector<reco::MuonSegmentMatch>::const_iterator segment = chamber->me0Matches.begin(); segment != chamber->me0Matches.end(); ++segment ){
-
-          LocalPoint trk_loc_coord(chamber->x, chamber->y, 0);
-          LocalPoint seg_loc_coord(segment->x, segment->y, 0);
-          LocalVector trk_loc_vec(chamber->dXdZ, chamber->dYdZ, 1);
-          LocalVector seg_loc_vec(segment->dXdZ, segment->dYdZ, 1);
-
-          const ME0Chamber * me0chamber = ME0Geometry_->chamber(chamber->id);
-
-          GlobalPoint trk_glb_coord = me0chamber->toGlobal(trk_loc_coord);
-          GlobalPoint seg_glb_coord = me0chamber->toGlobal(seg_loc_coord);
-
-          //double segDPhi = segment->me0SegmentRef->deltaPhi();
-          // need to check if this works
-          double segDPhi = me0chamber->computeDeltaPhi(seg_loc_coord, seg_loc_vec);
-          double trackDPhi = me0chamber->computeDeltaPhi(trk_loc_coord, trk_loc_vec);
-
-          deltaEta = std::abs(trk_glb_coord.eta() - seg_glb_coord.eta() );
-          deltaPhi = std::abs(trk_glb_coord.phi() - seg_glb_coord.phi() );
-          deltaPhiBend = std::abs(segDPhi - trackDPhi);
-
-          if (deltaEta < dEtaCut && deltaPhi < dPhiCut && deltaPhiBend < dPhiBendCut) result = true;
-
-        }
-      }
-    }
-
-  }
-
-  return result;
-
-}
-
 // ------------ method called once each job just before starting event loop  ------------
   void 
 BasicPatDistrib::beginJob()
 {
-}
+  // go to *OUR* rootfile
+  //rootFile_->cd();
 
-// ------------ method called once each run ----------------
-void
-BasicPatDistrib::beginRun(edm::Run const& iRun, edm::EventSetup const& iSetup)
-{
-  edm::ESHandle<ME0Geometry> hGeom;
-  iSetup.get<MuonGeometryRecord>().get(hGeom);
-  ME0Geometry_ =( &*hGeom);
-}
+  // Book Histograms
+  
 
-// ------------ method called when ending the processing of a run  ------------
-  void
-BasicPatDistrib::endRun(edm::Run const&, edm::EventSetup const&)
-{
 }
 
 // ------------ method called once each job just after ending the event loop  ------------
   void 
 BasicPatDistrib::endJob() 
 {
+
+  // go to *OUR* root file and store histograms
+  ////rootFile_->cd();
+
+  //// PhotonID Histograms
+  //h_isoEcalRecHit_->Write();
+  //h_isoHcalRecHit_->Write();
+  //h_trk_pt_solid_-> Write();
+  //h_trk_pt_hollow_->Write();
+  //h_ntrk_solid_->   Write();
+  //h_ntrk_hollow_->  Write();
+  //h_ebgap_->     Write();
+  //h_eeGap_->     Write();
+  //h_ebeeGap_->   Write();
+  //h_r9_->        Write();
+
+  //// Photon Histograms
+  //h_photonEt_->  Write();
+  //h_photonEta_-> Write();
+  //h_photonPhi_-> Write();
+  //h_hadoverem_-> Write();
+
+  //// Photon's SuperCluster Histograms
+  //h_photonScEt_->      Write();
+  //h_photonScEta_->     Write();
+  //h_photonScPhi_->     Write();
+  //h_photonScEtaWidth_->Write();
+
+  //// Composite or Other Histograms
+  //h_photonInAnyGap_->Write();
+  //h_nPassingPho_->   Write();
+  //h_nPho_->          Write();
+
+  //// Write the root file (really writes the TTree)
+  //rootFile_->Write();
+  //rootFile_->Close();
+
+
 }
 
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
