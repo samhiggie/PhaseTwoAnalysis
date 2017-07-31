@@ -15,7 +15,7 @@ from Configuration.AlCa.GlobalTag_condDBv2 import GlobalTag
 process.GlobalTag = GlobalTag(process.GlobalTag, '91X_upgrade2023_realistic_v1', '')
 
 process.load("FWCore.MessageService.MessageLogger_cfi")
-process.MessageLogger.cerr.FwkReport.reportEvery = 1000
+process.MessageLogger.cerr.FwkReport.reportEvery = 1000000
 process.MessageLogger.cerr.threshold = 'INFO'
 process.MessageLogger.categories.append('MyAna')
 process.MessageLogger.cerr.INFO = cms.untracked.PSet(

@@ -19,7 +19,7 @@ myana = cms.EDAnalyzer('BasicPatDistrib',
         # Some extra cuts you might wish to make
         #  before histograms/TTrees are filled.
         # Minimum Et
-        minPhotonEt     = cms.double(10.0),
+        minPhotonEt     = cms.double(0.0),
         # Minimum and max abs(eta)
         minPhotonAbsEta = cms.double(0.0),
         #maxPhotonAbsEta = cms.double(3.0),

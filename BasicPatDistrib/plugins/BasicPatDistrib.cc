@@ -263,11 +263,19 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources>  
     float genPhoton2_pt, genPhoton2_eta, genPhoton2_phi;
     float genPhotonDble_mass;
     float genBJetDble_Higgs_mass;
+    float recoPhoton1_pt, recoPhoton1_eta, recoPhoton1_phi;
+    float recoPhoton2_pt, recoPhoton2_eta, recoPhoton2_phi;
+    float recoPhotonDble_mass;
+    float recoBJetDble_Higgs_mass;
+
     float patGenBJetDble_Higgs_mass;
     float recoJetGenBJetDble_Higgs_mass;
-    size_t nGenPhotons, nGenB, nPatGenB, nrecoJetGenB;
+    size_t nGenPhotons, nRecoPhotons, nGenB, nPatGenB, nrecoJetGenB;
     
-    TLorentzVector genPhoton1, genPhoton2, genHiggs1, genB1, genB2, genHiggs2, patGenB1,patGenB2, recoJetGenB1, recoJetGenB2, patGenHiggs2, recoJetGenHiggs1, recoJetGenHiggs2;
+    TLorentzVector genPhoton1, genPhoton2, genHiggs1, recoPhoton1, recoPhoton2, recoHiggs, genB1, genB2, genHiggs2, patGenB1,patGenB2, recoJetGenB1, recoJetGenB2, patGenHiggs2, recoJetGenHiggs1, recoJetGenHiggs2;
+   
+    std::vector<TLorentzVector> genPho1, genPho2;
+
     // root file to store histograms
     //TFile*  rootFile_;
 
@@ -297,6 +305,12 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources>  
     TH1F* h_puppiPhoIsoNeuHad_;
     TH1F* h_puppiPhoIsoCharHad_;
     TH1F* h_puppiPhotonIso_;
+    TH1F* h_recoPhotonHiggsMass;
+    TH1F* h_genPhotonHiggsMass;
+    TH1F* h_matchPhotonPt;
+    TH1F* h_matchPhotonPtGen;
+    TProfile* tp_RecoGenEfficiencyPt;
+
 
     // Photon's SuperCluster Histograms
     TH1F* h_photonScEt_;
@@ -502,6 +516,12 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   h_puppiPhoIsoNeuHad_ = fs_->make<TH1F>("puppiPhotonIsolatedNeuHadron","Isolated Photon by Neutral Hadron PUPPI",100,0.0,140.0),
   h_puppiPhoIsoCharHad_ = fs_->make<TH1F>("puppiPhotonIsolatedCharHadron","Isolated Photon by Charged Hadron PUPPI",100,0.0,250.0),
   h_puppiPhotonIso_ = fs_->make<TH1F>("puppiPhotonIsolated","Isolated Photon PUPPI",100,0.0,200.0),
+  h_recoPhotonHiggsMass = fs_->make<TH1F>("recoPhotonHiggsMass", "recoPhoton_Higgs_mass",1000,1.,250.);
+  h_genPhotonHiggsMass = fs_->make<TH1F>("genPhotonHiggsMass", "genPhoton_Higgs_mass",1000,1.,250.);
+  h_matchPhotonPt = fs_->make<TH1F>("MatchedPhotonPt", "MatchedPhotonPt",1000,1.,250.);
+  h_matchPhotonPtGen= fs_->make<TH1F>("MatchedPhotonPtGen", "MatchedPhotonPtGen",1000,1.,250.);
+  tp_RecoGenEfficiencyPt = fs_->make<TProfile>("Efficiency", "RecoGenEfficienyPt",1000,1.,250.,0.0,1.);
+
 
   // Photon's SuperCluster Histograms
   h_photonScEt_       = fs_->make<TH1F>("photonScEt",  "Photon SuperCluster E_{T}", 200,  0, 200);
@@ -514,6 +534,9 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   h_nPassingPho_      = fs_->make<TH1F>("photonPassingCount", "Total number photons (0=NotPassing, 1=Passing)", 2, -0.5, 1.5);
   h_nPho_             = fs_->make<TH1F>("photonCount",        "Number of photons passing cuts in event",  10,  0,  10);
   tp_photonIso_nVtx_ = fs_->make<TProfile>("photonsNVtx","photon and Number of Vertices",1000,0.,220.,0.,100.);
+
+
+
   //Bjets invariant mass distribution. 
   h_goodBJets_Higgs_n_ = fs_->make<TH1D>("GoodBtaggedJetsN_R2_Selection",";Jet multiplicity;Events / 1", 5, 0., 5.);
   h_goodPatBJets_Higgs_n_ = fs_->make<TH1D>("GoodBtaggedJetsN_R2_Selection",";Jet multiplicity;Events / 1", 5, 0., 5.);
@@ -613,6 +636,7 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
   genBJetDble_Higgs_mass=0;
   patGenBJetDble_Higgs_mass=0;
   nGenPhotons = 0, nGenB = 0;
+  nRecoPhotons= 0;
 
   // Vertices
   int prVtx = -1;
@@ -651,6 +675,9 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
   }
   h_genJets_n_->Fill(nGenJets);
   
+
+
+
   for (size_t i = 0; i < allGenParts->size(); i++) {
 
     if (allGenParts->at(i).pdgId() != 22 && abs(allGenParts->at(i).pdgId()) != 5) continue;
@@ -669,10 +696,10 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
       cout << "" << endl << endl;
     }
     */
-    //Adding cuts for GenPhotons.... 
 
 
 
+    //GenPhotons.... 
 
     if (nMothers==1){
       if (allGenParts->at(i).mother(0)->pdgId() != 25) continue;
@@ -684,13 +711,17 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
 	  genPhoton1_eta = allGenParts->at(i).eta();
 	  genPhoton1_phi = allGenParts->at(i).pt();
       genPhoton1.SetPtEtaPhiM(genPhoton1_pt, genPhoton1_eta, genPhoton1_phi, 0);
+      genPho1.push_back(genPhoton1);
 	} else if (nGenPhotons == 2){
 	  genPhoton2_pt = allGenParts->at(i).pt();
 	  genPhoton2_eta = allGenParts->at(i).eta();
 	  genPhoton2_phi = allGenParts->at(i).pt();
       genPhoton2.SetPtEtaPhiM(genPhoton2_pt, genPhoton2_eta, genPhoton2_phi, 0);
       genHiggs1 = genPhoton1+genPhoton2;
+      genPho2.push_back(genPhoton2);
       genPhotonDble_mass = genHiggs1.M();
+      h_genPhotonHiggsMass->Fill(genPhotonDble_mass);
+      //std::cout<<"The Gen Higgs Mass:  "<<genPhotonDble_mass<<std::endl;
       //genPhotonDble_mass = TMath::Sqrt(2*genPhoton1_pt*genPhoton2_pt*(TMath::CosH(genPhoton1_eta-genPhoton2_eta)-TMath::Cos(genPhoton1_phi-genPhoton2_phi)));
 	}
       } else if (abs(allGenParts->at(i).pdgId()) == 5) {
@@ -966,7 +997,11 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
   // Photons
   int photonCounter = 0;
 
+  float firstPt=0.0;
+  float secondPt=0.0;
 
+
+  
   for (int i=0; i<int(photons.size()); i++)
   {
 
@@ -981,7 +1016,6 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
     float puppiPhoIsoNeuHad = currentPhoton.puppiNeutralHadronIso();
     float puppiPhoIsoCharHad = currentPhoton.puppiChargedHadronIso();
     float puppiPhotonIso = currentPhoton.puppiPhotonIso();
-
 
     // Only store photon candidates (SuperClusters) that pass some simple cuts
     bool passCuts = //(              photonEt < minPhotonEt_ ) &&
@@ -1038,8 +1072,48 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
 
       // It passed photon cuts, mark it
       h_nPassingPho_->Fill(1.0);
+      if(photons.size()>1){
+
+            if(photonPt>firstPt){
+                firstPt = photonPt;
+                recoPhoton1.SetPtEtaPhiM(photonPt,currentPhoton.eta(),currentPhoton.phi(),0.0);  
+            }
+            if((photonPt>secondPt)&&(photonPt<firstPt)){
+                secondPt = photonPt;
+                recoPhoton2.SetPtEtaPhiM(photonPt,currentPhoton.eta(),currentPhoton.phi(),0.0);  
+            }
+
+            if((i+1)==int(photons.size())){
+            //std::cout<<"The photon 1  Pt is: "<<firstPt<<" 2 photon "<<secondPt<<std::endl;
+            recoHiggs = recoPhoton1 + recoPhoton2;
+            h_recoPhotonHiggsMass->Fill(recoHiggs.M());
+            //std::cout<<"RecoHiggs mass: "<<recoHiggs.M()<<std::endl;
+            firstPt=0.0;
+            secondPt=0.0;
+
+            //Matching Delta R for efficiency and pt histograms. 
+            for(int j=0; j<int(genPho1.size());j++){
+            //std::cout<<"Reco DelR: "<<recoPhoton1.DeltaR(recoPhoton2)<<" Gen DelR: "<<genPho1[j].DeltaR(genPho2[j]);
+            if(recoPhoton1.DeltaR(recoPhoton2) > genPho1[j].DeltaR(genPho2[j])-0.001 &&
+                  recoPhoton1.DeltaR(recoPhoton2)< genPho1[j].DeltaR(genPho2[j])+0.001  ){
+                
+                h_matchPhotonPt->Fill(recoPhoton1.Pt()+recoPhoton2.Pt());
+                h_matchPhotonPtGen->Fill(genPho1[j].Pt()+genPho2[j].Pt());
+                tp_RecoGenEfficiencyPt->Fill(genPho1[j].Pt()+genPho2[j].Pt(),(recoPhoton1.Pt()+recoPhoton2.Pt())/(genPho1[j].Pt()+genPho2[j].Pt()));
+            }
 
 
+            //recoPhoton1 recoPhoton2;
+            //genPhoton1 genPhoton2;
+            }
+
+            }
+       }
+
+
+
+
+ 
       ///////////////////////////////////////////////////////
       //                fill TTree (optional)              //
       ///////////////////////////////////////////////////////
@@ -1094,6 +1168,8 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
   tp_photonIso_nVtx_->GetXaxis()->SetTitle("# of Isolated Photons");
   tp_photonIso_nVtx_->GetYaxis()->SetTitle("# of Verticies");
 
+  tp_RecoGenEfficiencyPt->GetXaxis()->SetTitle("Pt Gen");
+  tp_RecoGenEfficiencyPt->GetYaxis()->SetTitle("PtReco/Pt Gen match to #Delta R");
 
 }
 
