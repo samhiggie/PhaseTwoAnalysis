@@ -249,6 +249,7 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources>  
         float isEEGap;
         float isEBEEGap;
         float r9;
+        float pt;
         float et;
         float eta;
         float phi;
@@ -294,6 +295,7 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources>  
     TH1F* h_r9_;
 
     // Photon Histograms
+    TH1F* h_photonPt_;
     TH1F* h_photonEt_;
     TH1F* h_photonEta_;
     TH1F* h_photonPhi_;
@@ -309,6 +311,8 @@ class BasicPatDistrib : public edm::one::EDAnalyzer<edm::one::SharedResources>  
     TH1F* h_genPhotonHiggsMass;
     TH1F* h_matchPhotonPt;
     TH1F* h_matchPhotonPtGen;
+    TH1F* h_genDeltaR;
+    TH1F* h_recoDeltaR;
     TProfile* tp_RecoGenEfficiencyPt;
 
 
@@ -505,6 +509,7 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   h_r9_            = fs_->make<TH1F>("photonR9",               "R9 = E(3x3) / E(SuperCluster)", 300, 0, 3);
 
   // Photon Histograms
+  h_photonPt_      = fs_->make<TH1F>("photonPt",     "Photon P_{T}", 50,0., 1000.);
   h_photonEt_      = fs_->make<TH1F>("photonEt",     "Photon E_{T}",  200,  0, 200);
   h_photonEta_     = fs_->make<TH1F>("photonEta",    "Photon #eta",   200, -4,   4);
   h_photonPhi_     = fs_->make<TH1F>("photonPhi",    "Photon #phi",   200, -1.*TMath::Pi(), TMath::Pi());
@@ -520,7 +525,9 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   h_genPhotonHiggsMass = fs_->make<TH1F>("genPhotonHiggsMass", "genPhoton_Higgs_mass",1000,1.,250.);
   h_matchPhotonPt = fs_->make<TH1F>("MatchedPhotonPt", "MatchedPhotonPt",1000,1.,250.);
   h_matchPhotonPtGen= fs_->make<TH1F>("MatchedPhotonPtGen", "MatchedPhotonPtGen",1000,1.,250.);
-  tp_RecoGenEfficiencyPt = fs_->make<TProfile>("Efficiency", "RecoGenEfficienyPt",1000,1.,250.,0.0,1.);
+  h_recoDeltaR= fs_->make<TH1F>("RecoDeltaR", "RecoDeltaR",1000,0.001,5.);
+  h_genDeltaR= fs_->make<TH1F>("GenDeltaR", "GenDeltaR",1000,0.001,5.);
+  tp_RecoGenEfficiencyPt = fs_->make<TProfile>("Efficiency", "RecoGenEfficienyPt",1000,1.,250.,0.0,3.);
 
 
   // Photon's SuperCluster Histograms
@@ -548,7 +555,7 @@ BasicPatDistrib::BasicPatDistrib(const edm::ParameterSet& iConfig):
   // Create a TTree of photons if set to 'True' in config file
   if ( createPhotonTTree_ ) {
     tree_PhotonAll_     = fs_->make<TTree>("TreePhotonAll", "Reconstructed Photon");
-    tree_PhotonAll_->Branch("recPhoton", &recPhoton.isolationEcalRecHit, "isolationEcalRecHit/F:isolationHcalRecHit:isolationSolidTrkCone:isolationHollowTrkCone:nTrkSolidCone:nTrkHollowCone:isEBGap:isEEGap:isEBEEGap:r9:et:eta:phi:hadronicOverEm:ecalIso:hcalIso:trackIso");
+    tree_PhotonAll_->Branch("recPhoton", &recPhoton.isolationEcalRecHit, "isolationEcalRecHit/F:isolationHcalRecHit:isolationSolidTrkCone:isolationHollowTrkCone:nTrkSolidCone:nTrkHollowCone:isEBGap:isEEGap:isEBEEGap:r9:pt:et:eta:phi:hadronicOverEm:ecalIso:hcalIso:trackIso");
 
 
     tree_genPhotonAll_     = fs_->make<TTree>("TreeGenPhotonAll", "Generated Photon from Higgs");
@@ -1047,6 +1054,7 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
       h_r9_->           Fill(currentPhoton.r9());
 
       // Photon Variables
+      h_photonPt_->  Fill(photonPt);
       h_photonEt_->  Fill(photonEt);
       h_photonEta_-> Fill(currentPhoton.eta());
       h_photonPhi_-> Fill(currentPhoton.phi());
@@ -1094,9 +1102,11 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
             //Matching Delta R for efficiency and pt histograms. 
             for(int j=0; j<int(genPho1.size());j++){
             //std::cout<<"Reco DelR: "<<recoPhoton1.DeltaR(recoPhoton2)<<" Gen DelR: "<<genPho1[j].DeltaR(genPho2[j]);
+            // Gen DelR: 2.96679Reco DelR: 2.86304 Gen DelR: 1.57869Reco DelR: 2.86304
             if(recoPhoton1.DeltaR(recoPhoton2) > genPho1[j].DeltaR(genPho2[j])-0.001 &&
                   recoPhoton1.DeltaR(recoPhoton2)< genPho1[j].DeltaR(genPho2[j])+0.001  ){
-                
+                h_genDeltaR->Fill(genPho1[j].DeltaR(genPho2[j]));
+                h_recoDeltaR->Fill(recoPhoton1.DeltaR(recoPhoton2));
                 h_matchPhotonPt->Fill(recoPhoton1.Pt()+recoPhoton2.Pt());
                 h_matchPhotonPtGen->Fill(genPho1[j].Pt()+genPho2[j].Pt());
                 tp_RecoGenEfficiencyPt->Fill(genPho1[j].Pt()+genPho2[j].Pt(),(recoPhoton1.Pt()+recoPhoton2.Pt())/(genPho1[j].Pt()+genPho2[j].Pt()));
@@ -1128,6 +1138,7 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
         recPhoton.isEEGap                = currentPhoton.isEEGap();
         recPhoton.isEBEEGap              = currentPhoton.isEBEEGap();
         recPhoton.r9                     = currentPhoton.r9();
+        recPhoton.pt                     = currentPhoton.pt();
         recPhoton.et                     = currentPhoton.et();
         recPhoton.eta                    = currentPhoton.eta();
         recPhoton.phi                    = currentPhoton.phi();
@@ -1168,8 +1179,8 @@ BasicPatDistrib::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup
   tp_photonIso_nVtx_->GetXaxis()->SetTitle("# of Isolated Photons");
   tp_photonIso_nVtx_->GetYaxis()->SetTitle("# of Verticies");
 
-  tp_RecoGenEfficiencyPt->GetXaxis()->SetTitle("Pt Gen");
-  tp_RecoGenEfficiencyPt->GetYaxis()->SetTitle("PtReco/Pt Gen match to #Delta R");
+  tp_RecoGenEfficiencyPt->GetXaxis()->SetTitle("Pt_{Gen} [GeV]");
+  tp_RecoGenEfficiencyPt->GetYaxis()->SetTitle("Pt_{Reco}/Pt_{Gen} match to #Delta R");
 
 }
 
